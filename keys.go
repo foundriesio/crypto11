@@ -24,6 +24,7 @@ package crypto11
 import (
 	"crypto"
 	"crypto/x509"
+
 	"github.com/miekg/pkcs11"
 	"github.com/pkg/errors"
 )
@@ -610,4 +611,52 @@ func (c *Context) GetPubAttribute(key interface{}, attribute AttributeType) (a *
 	}
 
 	return set[attribute], nil
+}
+
+func (c *Context) deleteKey(id []byte, label []byte, ktype uint) error {
+	if id == nil && label == nil {
+		return errors.New("id, label and serial cannot all be nil")
+	}
+
+	template := []*pkcs11.Attribute{
+		pkcs11.NewAttribute(pkcs11.CKA_CLASS, ktype),
+	}
+
+	if id != nil {
+		template = append(template, pkcs11.NewAttribute(pkcs11.CKA_ID, id))
+	}
+	if label != nil {
+		template = append(template, pkcs11.NewAttribute(pkcs11.CKA_LABEL, label))
+	}
+
+	err := c.withSession(func(session *pkcs11Session) error {
+		err := session.ctx.FindObjectsInit(session.handle, template)
+		if err != nil {
+			return err
+		}
+		handles, _, err := session.ctx.FindObjects(session.handle, 1)
+		finalErr := session.ctx.FindObjectsFinal(session.handle)
+		if err != nil {
+			return err
+		}
+		if finalErr != nil {
+			return finalErr
+		}
+		if len(handles) == 0 {
+			return nil
+		}
+		return session.ctx.DestroyObject(session.handle, handles[0])
+	})
+
+	return err
+}
+
+// DeleteKeyPair destroys a previously created keypair. it will return
+// nil if succeeds or if the keypair does not exist. Any combination of id
+// and label can be provided. An error is return if all are nil.
+func (c *Context) DeleteKeyPair(id []byte, label []byte) error {
+	if err := c.deleteKey(id, label, pkcs11.CKO_PRIVATE_KEY); err != nil {
+		return err
+	}
+	return c.deleteKey(id, label, pkcs11.CKO_PUBLIC_KEY)
 }
